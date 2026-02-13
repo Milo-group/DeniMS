@@ -125,6 +125,7 @@ Additionally, a **t-SNE visualization** is generated (unless `-no_plot` is speci
 ### Diffusion Model Training
 
 The diffusion model generates molecular graphs conditioned on MS embeddings from the contrastive model. Stages 2-3 consist of pretraining, finetuning, inference, and post-analysis.
+This diffusion stage is adapted from [DiGress](https://github.com/cvignac/DiGress).
 
 #### Stage 2: Graph2Mol Pretraining
 
