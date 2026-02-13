@@ -23,19 +23,19 @@ conda install -c conda-forge rdkit=2023.03.2 graph-tool=2.45
 
 ### Preprocessing
 
-We process high resolution MS datasets using a standardized preparation pipeline that filters invalid entries, annotates fragment ion formulas, and associates each spectrum to the relevant metadata. The initial processing steps follow our previous work, available here: {GitLink}.
+We process high-resolution MS datasets using a standardized preparation pipeline that filters invalid entries, annotates fragment-ion formulas, and associates each spectrum with the relevant metadata. The initial processing steps follow our previous work, available in the following link: https://github.com/Nir-Cohen-2003/HRMS_utils.
 
 The final preprocessing scripts used in this project are provided in the Preprocessing/ folder.
 
-A fully integrated pipeline with step by step explanations *will be added soon*.
+A fully integrated pipeline with step-by-step explanations *will be added soon*.
 
-In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary can be downloaded from: [Zenodo_link]
+In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary can be downloaded from [Zenodo](https://zenodo.org/records/18539020)
 
 
 <!--
 #### Process FragHub Dataset
 
-The preprocessing stage filters d, generates molecular graph representations, and creates train/validation/test splits.
+The preprocessing stage filters data, generates molecular graph representations, and creates train/validation/test splits.
 
 ```bash
 cd Preprocessing
@@ -58,12 +58,12 @@ This will generate:
 - `-val_fraction`: Validation set fraction (default: 0.05)
 - `-test_fraction`: Test set fraction (default: 0.05)
 
-It is also possible to download the preprocessed filtered dataset and the molecular graph dictionary from [TO BE COMPLETED]
+It is also possible to download the preprocessed filtered dataset and the molecular graph dictionary from [Zenodo](https://zenodo.org/records/18539020)
 -->
 
 ### Stage 1: Contrastive Training
 
-Train the contrastive model to learn aligned representations between MS spectra and molecular structures.
+Train the contrastive model to learn aligned representations between MS spectra and molecular structures. A trained version can also be downloaded from [Zenodo](https://zenodo.org/records/18539020).
 
 #### Basic Training
 
@@ -124,7 +124,7 @@ Additionally, a **t-SNE visualization** is generated (unless `-no_plot` is speci
 
 ### Diffusion Model Training
 
-The diffusion model generates molecular graphs conditioned on MS embeddings from the contrastive model. Stages 2-3 consists of pretraining, finetuning, inference, and post-analysis.
+The diffusion model generates molecular graphs conditioned on MS embeddings from the contrastive model. Stages 2-3 consist of pretraining, finetuning, inference, and post-analysis.
 
 #### Stage 2: Graph2Mol Pretraining
 
@@ -137,7 +137,7 @@ python main.py \
     conditioning.embedding_model_path=[contrastive_cp_path]
 ```
 
-This trains the base diffusion model to generate molecules unconditionally. By default, it works on the FragHub dataset, but you can modify the configuration files in `MS_diffusion/configs/` to work with different datasets.
+This trains the base diffusion model to generate molecules unconditionally. By default, it uses the FragHub dataset, but you can modify the configuration files in `MS_diffusion/configs/` to work with other datasets.
 
 **Conditioning Types:**
 - `ms2emb`: MS spectra → embeddings (from contrastive model) - used for MS2Mol inference
@@ -189,5 +189,5 @@ Analyze the inference results using the provided Jupyter notebook:
 3. In the fourth cell, specify the inference output folder path from Stage 3b
 4. Execute the remaining cells to generate comprehensive evaluation metrics and visualizations
 
-The notebook computes detailed metrics and generates plots saved to `MS_diffusion/analysis_outputs/`.
+The notebook computes detailed metrics and generates plots, which are saved to `MS_diffusion/analysis_outputs/`.
 
