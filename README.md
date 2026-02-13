@@ -27,7 +27,7 @@ We process high-resolution MS datasets using a standardized preparation pipeline
 
 The final preprocessing scripts used in this project are provided in the Preprocessing/ folder.
 
-A fully integrated pipeline with step-by-step explanations *will be added soon*.
+A fully integrated pipeline with step-by-step explanations **will be added soon**.
 
 In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary can be downloaded from [Zenodo](https://zenodo.org/records/18539020).
 
