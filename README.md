@@ -23,13 +23,13 @@ conda install -c conda-forge rdkit=2023.03.2 graph-tool=2.45
 
 ### Preprocessing
 
-We process high-resolution MS datasets using a standardized preparation pipeline that filters invalid entries, annotates fragment-ion formulas, and associates each spectrum with the relevant metadata. The initial processing steps follow our previous work, available in the following link: https://github.com/Nir-Cohen-2003/HRMS_utils.
+We process high-resolution MS datasets using a standardized preparation pipeline that filters invalid entries, annotates fragment-ion formulas, and associates each spectrum with the relevant metadata. The initial processing steps follow our previous work, available in the following repository: https://github.com/Nir-Cohen-2003/HRMS_utils.
 
 The final preprocessing scripts used in this project are provided in the Preprocessing/ folder.
 
 A fully integrated pipeline with step-by-step explanations *will be added soon*.
 
-In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary can be downloaded from [Zenodo](https://zenodo.org/records/18539020)
+In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary can be downloaded from [Zenodo](https://zenodo.org/records/18539020).
 
 
 <!--
