@@ -1,0 +1,4 @@
+name: 'ms'
+remove_h: True
+random_subset: null
+pin_memory: True

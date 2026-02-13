@@ -1,0 +1,7 @@
+# conditioning settings
+embeddings_type: mol2emb # ms2emb, ms2fp, mol2emb, mol2fp, null
+ms_data_path: "Preprocessing/fraghub/fraghub_filtered.parquet"
+graph_dict_path: "Preprocessing/fraghub/smiles_dict_fraghub.pt"
+embedding_model_path: None
+splitting_path: "Preprocessing/fraghub/splits_fraghub_random.pkl" 
+load_subdata_dir: null

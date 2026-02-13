@@ -1,0 +1,16 @@
+# Training settings
+n_epochs: 4000
+batch_size: 64
+lr: 0.0002
+clip_grad: null          # float, null to disable
+save_model: True
+num_workers: 4
+ema_decay: 0     # 'Amount of EMA decay, 0 means off. A reasonable value  is 0.999.'
+progress_bar: True
+weight_decay: 1e-12
+optimizer: adamw # adamw,nadamw,nadam => nadamw for large batches, see http://arxiv.org/abs/2102.06356 for the use of nesterov momentum with large batches
+seed: 0
+
+# Embedding noise augmentation
+add_embedding_noise: False  # Set to True to add Gaussian noise to embeddings during training
+embedding_noise_variance: 0.01  # Variance of the Gaussian noise (mean is 0)
