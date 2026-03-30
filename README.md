@@ -25,7 +25,7 @@ Use `apply_model` to run the trained MS2Mol diffusion model on experimental MS d
 
 ### Data preparation
 
-Experimental data must be stored in a single Parquet file where **each row corresponds to one MS/MS spectrum**, and spectra from the same compound share the same `Compound_index`.  
+Experimental data must be stored in a single Parquet file, where each row corresponds to a single MS/MS spectrum, and spectra from the same compound share the same `Compound_index`.  
 The file should contain the following columns:  
 1. `Compound_index` – integer ID of the compound  
 2. `precursor_formula` – list/array encoding the elemental composition of the precursor, in the same format used for FragHub  
