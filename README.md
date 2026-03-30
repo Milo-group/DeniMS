@@ -52,7 +52,7 @@ python apply_model.py \
   --num_repeats 50 \
 ```
 
-Our trained models (Fraghub_contrastive_random.ckpt, Fraghub_FP_random.ckpt) can be downloaded from [Zenodo](https://zenodo.org/records/18539020).
+Our trained models (Fraghub_contrastive_random.ckpt, Fraghub_FP_random.ckpt) can be downloaded from [Zenodo](https://zenodo.org/records/19060052).
 
 #### Running `run_inference_experimental` as an ensemble
 
@@ -87,11 +87,11 @@ The final preprocessing scripts used in this project are provided in the Preproc
 
 A fully integrated pipeline with step-by-step explanations **will be added soon**.
 
-In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary (FragHub_filtered_smiles_dict.pt, FragHub_filtered.parquet) can be downloaded from [Zenodo](https://zenodo.org/records/18539020).
+In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary (FragHub_filtered_smiles_dict.pt, FragHub_filtered.parquet) can be downloaded from [Zenodo](https://zenodo.org/records/19060052).
 
 ### Stage 1: Encoder pretraining
 
-Train the MS spectra encoder with respect to molecular structures. The pretrained contrastive and FP_prediction encoderes (Contrastive_FragHub_random.pth, FP_FragHub_random.pth) can also be downloaded from [Zenodo](https://zenodo.org/records/18539020).
+Train the MS spectra encoder with respect to molecular structures. The pretrained contrastive and FP_prediction encoderes (Contrastive_FragHub_random.pth, FP_FragHub_random.pth) can also be downloaded from [Zenodo](https://zenodo.org/records/19060052).
 
 #### Basic Training Example
 
