@@ -1,6 +1,6 @@
 # DeniMS - *De-novo* Identification of Mass Spectra
 
-This repository accompanies the paper: [Paper_link]
+This repository accompanies the paper: [Paper](https://chemrxiv.org/doi/full/10.26434/chemrxiv.15000101/v1)
 
 ![Overview Figure](Overview%20Figure.jpeg)
 
@@ -19,7 +19,65 @@ pip install -r requirements.txt
 conda install -c conda-forge rdkit=2023.03.2 graph-tool=2.45
 ```
 
-## Quick Start
+## Usage
+
+Use `apply_model` to run the trained MS2Mol diffusion model on experimental MS data.
+
+### Data preparation
+
+Experimental data must be stored in a single Parquet file where **each row corresponds to one MS/MS spectrum**, and spectra from the same compound share the same `Compound_index`.  
+The file should contain the following columns:  
+1. `Compound_index` – integer ID of the compound  
+2. `precursor_formula` – list/array encoding the elemental composition of the precursor, in the same format used for FragHub  
+3. `formulas` – list of fragment-ion formulas per spectrum, each represented as a list/array of element counts  
+4. `precursor_type` – e.g. `[M+H]+` or `[M-H]-`  
+5. `collision_energy_NCE` – collision energy
+
+See `Preprocessing/experimental/experimental.csv`  for a reference example.  
+To calculate the formulas from a raw MS file you can use our `HRMS_utils` repository. SIRIUS or other formula annotation programs can also be used.
+
+
+### Model application
+
+To run our model, you can use the notebook `MS_diffusion/src/apply_model.ipynb`.
+
+You can also run experimental inference directly from the command line:
+
+```bash
+cd MS_diffusion/src
+python apply_model.py \
+  --model_checkpoint [path_to_model_ckpt.ckpt] \
+  --experimental_parquet ../../Preprocessing/experimental/experimental.parquet \
+  --output_dir ./inference_results \
+  --num_repeats 50 \
+```
+
+Our trained models (Fraghub_contrastive_random.ckpt, Fraghub_FP_random.ckpt) can be downloaded from [Zenodo](https://zenodo.org/records/18539020).
+
+#### Running `run_inference_experimental` as an ensemble
+
+`run_inference_experimental` supports generating molecules using **multiple diffusion checkpoints** and aggregating the results into an ensemble:
+
+```bash
+cd MS_diffusion/src
+python apply_model.py \
+  --experimental_parquet ../../Preprocessing/experimental/experimental.parquet \
+  --output_dir ./inference_ensemble \
+  --ensemble_models_dir [path_to_model_ckpt.ckpt] \
+  --repeats_per_model 25
+```
+
+In ensemble mode, the function:
+
+- Runs model for each checkpoint and write results into a subdirectory.
+- Merges all generated molecules and SMILES per compound across models.
+- Writes ensemble summary files in `output_dir`, including:
+  - `inference_summary_ensemble.txt`
+  - `all_compounds_smiles_ensemble.txt`
+  - `top3_smiles_per_compound_ensemble.csv`
+
+
+## Retrain a model
 
 ### Preprocessing
 
@@ -29,43 +87,13 @@ The final preprocessing scripts used in this project are provided in the Preproc
 
 A fully integrated pipeline with step-by-step explanations **will be added soon**.
 
-In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary can be downloaded from [Zenodo](https://zenodo.org/records/18539020).
+In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary (FragHub_filtered_smiles_dict.pt, FragHub_filtered.parquet) can be downloaded from [Zenodo](https://zenodo.org/records/18539020).
 
+### Stage 1: Encoder pretraining
 
-<!--
-#### Process FragHub Dataset
+Train the MS spectra encoder with respect to molecular structures. The pretrained contrastive and FP_prediction encoderes (Contrastive_FragHub_random.pth, FP_FragHub_random.pth) can also be downloaded from [Zenodo](https://zenodo.org/records/18539020).
 
-The preprocessing stage filters data, generates molecular graph representations, and creates train/validation/test splits.
-
-```bash
-cd Preprocessing
-python data_processing.py \
-    -input_parquet fraghub/fraghub.parquet \
-    -generate_graph_dict \
-    -split_type random 
-```
-
-This will generate:
-- `fraghub/fraghub_filtered.parquet`: Filtered MS spectra data
-- `fraghub/fraghub_smiles_canonical.txt`: Canonical SMILES strings
-- `fraghub/smiles_dict_fraghub.pt`: A dictionary that contains for each SMILES in the dataset its molecular graph, FP representation, and corresponding indices in fraghub_filtered.parquet
-- `fraghub/splits_fraghub_random.pkl`: Train/val/test splits (if split_type is specified)
-
-**Key Arguments:**
-- `-input_parquet`: Path to input parquet file
-- `-generate_graph_dict`: Generate molecular graph dictionary
-- `-split_type`: Split type (`random` or `MCES`)
-- `-val_fraction`: Validation set fraction (default: 0.05)
-- `-test_fraction`: Test set fraction (default: 0.05)
-
-It is also possible to download the preprocessed filtered dataset and the molecular graph dictionary from [Zenodo](https://zenodo.org/records/18539020)
--->
-
-### Stage 1: Contrastive Training
-
-Train the contrastive model to learn aligned representations between MS spectra and molecular structures. A trained version can also be downloaded from [Zenodo](https://zenodo.org/records/18539020).
-
-#### Basic Training
+#### Basic Training Example
 
 ```bash
 python train.py \
@@ -81,7 +109,6 @@ python train.py \
 
 - **`contrastive`**: InfoNCE contrastive loss (default)
 - **`fp`**: MSE loss to molecular fingerprints
-- **`mixed`**: Combined contrastive and fingerprint losses
 
 #### Key Arguments
 
@@ -96,11 +123,11 @@ python train.py \
 **Data:**
 - `-data_path`: Path to processed parquet file
 - `-smiles_path`: Path to SMILES graph dictionary
-- `-split_path`: Path to predefined splits (optional, uses random split if not provided)
+- `-split_path`: Path to predefined splits (uses random split if not provided)
 
 #### Evaluation
 
-Evaluate a trained contrastive model:
+Evaluate a trained model:
 
 ```bash
 python run_evaluation.py \
@@ -129,16 +156,17 @@ This diffusion stage is adapted from [DiGress](https://github.com/cvignac/DiGres
 
 #### Stage 2: Graph2Mol Pretraining
 
-First, pretrain the diffusion model on molecular graphs without MS conditioning (graph2mol). This establishes a strong baseline for unconditional molecular generation:
+First, pretrain the diffusion model on molecular graphs without MS conditioning (graph2mol). For example, to run a diffusion model based on graph embeddings from the contrastive model, run:
 
 ```bash
 cd MS_diffusion/src
 python main.py \
     conditioning.embeddings_type=mol2emb \
-    conditioning.embedding_model_path=[contrastive_cp_path]
+    conditioning.embedding_model_path=[contrastive_cp_path] \
+    train.finetune_ms_encoder=False
 ```
 
-This trains the base diffusion model to generate molecules unconditionally. By default, it uses the FragHub dataset, but you can modify the configuration files in `MS_diffusion/configs/` to work with other datasets.
+By default, it uses the FragHub dataset, but you can modify the configuration files in `MS_diffusion/configs/` to work with other datasets.
 
 **Conditioning Types:**
 - `ms2emb`: MS spectra → embeddings (from contrastive model) - used for MS2Mol inference
@@ -154,17 +182,19 @@ This trains the base diffusion model to generate molecules unconditionally. By d
 
 #### Stage 3a: MS2Mol Finetuning
 
-Finetune the pretrained Graph2Mol model with MS conditioning to enable MS-to-molecule generation:
+Finetune the pretrained Graph2Mol model and pretrained MS encoder to enable MS-to-molecule generation:
 
 ```bash
 cd MS_diffusion/src
 python main.py \
     conditioning.embeddings_type=ms2emb \
     conditioning.embedding_model_path=[contrastive_cp_path] \
-    general.resume=[graph2mol_cp_path]
+    general.resume=[graph2mol_cp_path] \
+    train.finetune_ms_encoder=True \
+    train.lr=0.0001 
 ```
 
-Note: Change `embeddings_type` from `mol2emb` to `ms2emb` to switch from molecular graph conditioning to MS spectrum conditioning.
+Note: Change `embeddings_type` from `mol2emb` to `ms2emb` to switch from molecular graph conditioning to MS spectrum conditioning. For FP-based model, change mol2fp to ms2fp.
 
 #### Stage 3b: MS2Mol Inference
 
@@ -176,10 +206,13 @@ python main.py \
     conditioning.embeddings_type=ms2emb \
     conditioning.embedding_model_path=[contrastive_cp_path] \
     general.test_only=[ms2mol_cp_path] \ 
-    general.samples_to_generate='all'
+    general.samples_to_generate='all' \
+    train.finetune_ms_encoder=True  
 ```
 
-This generates molecular structures for each test MS spectrum. By default, the model generates 25 candidate molecules per spectrum and computes metrics using a statistical approach. The inference results are saved in an output folder (typically in `MS_diffusion/outputs/`).
+This generates molecular structures for each test MS spectrum. By default, the model generates 50 candidate molecules per spectrum and computes metrics using a statistical approach. The inference results are saved in an output folder (typically in `MS_diffusion/outputs/`).
+
+Note that train.finetune_ms_encoder should be true just if the checkpoint provide fineruned MS encoder weights. When relying on freezed MS encoder weights, use False.
 
 #### Stage 3c: Post-Analysis of Inference Results
 

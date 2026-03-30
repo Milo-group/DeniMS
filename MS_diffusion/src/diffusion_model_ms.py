@@ -1,11 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+
+
 import pytorch_lightning as pl
 import time
 import wandb
 import os
 import random
+import pathlib
+import sys
 
 from tqdm import tqdm
 
@@ -16,12 +21,19 @@ from metrics.train_metrics import TrainLossDiscreteEdges
 from metrics.abstract_metrics import SumExceptBatchMetric, SumExceptBatchKL, NLL
 import utils
 
+_ms2mol_root = pathlib.Path(os.path.realpath(__file__)).parents[2]
+if str(_ms2mol_root) not in sys.path:
+    sys.path.insert(0, str(_ms2mol_root))
 
-
+from model import Contrastive_model
+from dataloaders import (
+    one_hot_encode_precursor, one_hot_encode_energy, 
+    positional_encoding, elements
+)
 
 class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
     def __init__(self, cfg, dataset_infos, train_metrics, sampling_metrics, visualization_tools, extra_features,
-                 domain_features):
+                 domain_features, ms_dataframe=None, ms_graph_dict=None):
         super().__init__()
 
         input_dims = dataset_infos.input_dims
@@ -67,40 +79,127 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         self.visualization_tools = visualization_tools
         self.extra_features = extra_features
         self.domain_features = domain_features
+        self.ms_dataframe = ms_dataframe
+        self.ms_graph_dict = ms_graph_dict
 
-        self.model = GraphTransformer(n_layers=cfg.model.n_layers,
+        self.model = GraphTransformer(
+            n_layers=cfg.model.n_layers,
                                       input_dims=input_dims,
                                       hidden_mlp_dims=cfg.model.hidden_mlp_dims,
                                       hidden_dims=cfg.model.hidden_dims,
                                       output_dims=output_dims,
                                       act_fn_in=nn.ReLU(),
-                                      act_fn_out=nn.ReLU())
+            act_fn_out=nn.ReLU(),
+        )
+
+        # Optional ms2mol encoder for online embedding & finetuning
+        self.finetune_ms_encoder = getattr(cfg.train, "finetune_ms_encoder", False)
+        self.embeddings_type = getattr(cfg.conditioning, "embeddings_type", None)
+        self.ms_encoder_model = None
+
+        if self.finetune_ms_encoder:
+            if Contrastive_model is None:
+                raise ImportError("Could not import Contrastive_model from ms2mol.model for MS encoder finetuning.")
+            if one_hot_encode_precursor is None or one_hot_encode_energy is None:
+                raise ImportError("Could not import MS data processing functions from ms2mol.dataloaders.")
+            if self.ms_dataframe is None or self.ms_graph_dict is None:
+                raise ValueError("ms_dataframe and ms_graph_dict must be provided when finetune_ms_encoder=True.")
+            
+            # Initialize positional encoding for MS feature processing
+            self.ms_positional_encoding = positional_encoding()
+            self.ms_max_peaks = 128 
+            self.ms_padded_tensor_template = torch.zeros((self.ms_max_peaks, 144), dtype=torch.float32)
+
+
+            #load the MS encoder
+            encoder_ckpt_path = getattr(cfg.conditioning, "embedding_model_path", None)
+            encoder_ckpt_path_clean = None
+            if encoder_ckpt_path is not None:
+                encoder_ckpt_path_clean = str(encoder_ckpt_path).strip()
+
+            load_from_ckpt = (encoder_ckpt_path_clean is not None and encoder_ckpt_path_clean.lower() not in ("none", ""))
+
+            if load_from_ckpt:
+
+                if not os.path.isabs(encoder_ckpt_path_clean):
+                    encoder_ckpt_path_clean = os.path.join(str(_ms2mol_root), encoder_ckpt_path_clean)
+
+                checkpoint = torch.load(
+                    encoder_ckpt_path_clean,
+                    map_location=torch.device("cpu"),
+                    weights_only=False,
+                )
+
+                if "model" not in checkpoint:
+                        raise KeyError(
+                            f"Checkpoint at {encoder_ckpt_path_clean} does not contain a 'model' state_dict."
+                        )
+
+                state_dict = checkpoint["model"]
+
+                if self.embeddings_type == "ms2fp":
+                    output_dim = state_dict["out_mlp.2.bias"].shape[0]
+                else:
+                    output_dim = state_dict["ms_encoder.proj"].shape[1]
+
+                is_graph = any("graph_encoder" in k for k in state_dict.keys())
+                fp_pred = any("out_mlp" in k for k in state_dict.keys())
+                trainable_temperature = any("inv_temperature" in k for k in state_dict.keys())
+
+                self.ms_encoder_model = Contrastive_model(
+                    hidden_dim=512,
+                    max_len=129,
+                    num_transformer_layers=3,
+                    nhead=8,
+                    embeddings_dim=output_dim,
+                    dropout=0.1,
+                    input_dropout=0.1,
+                    fp_length=output_dim if self.embeddings_type == "ms2fp" else 2048,
+                    graph=is_graph,
+                    fp_pred=fp_pred,
+                    initial_temperature=checkpoint.get("temperature", 15.0),
+                    trainable_temperature=trainable_temperature,
+                )
+                self.ms_encoder_model.load_state_dict(state_dict, strict=False)
+
+            else:
+                output_dim = int(self.embeddings_dims)
+                is_graph = getattr(cfg.conditioning, "ms_encoder_graph", False)
+                fp_pred = self.embeddings_type == "ms2fp"
+
+                initial_temperature = getattr(cfg.conditioning, "ms_encoder_initial_temperature", 30.0)
+                trainable_temperature = getattr(cfg.conditioning, "ms_encoder_trainable_temperature", False)
+
+                self.ms_encoder_model = Contrastive_model(
+                    hidden_dim=512,
+                    max_len=129,
+                    num_transformer_layers=3,
+                    nhead=8,
+                    embeddings_dim=output_dim,
+                    dropout=0.1,
+                    input_dropout=0.1,
+                    fp_length=output_dim if self.embeddings_type == "ms2fp" else 2048,
+                    graph=is_graph,
+                    fp_pred=fp_pred,
+                    initial_temperature=initial_temperature,
+                    trainable_temperature=trainable_temperature,
+                )
 
         self.noise_schedule = PredefinedNoiseScheduleDiscrete(cfg.model.diffusion_noise_schedule,
                                                               timesteps=cfg.model.diffusion_steps)
 
-        if cfg.model.transition == 'uniform':
-            self.transition_model = DiscreteUniformTransition(x_classes=self.Xdim_output, e_classes=self.Edim_output,
-                                                              y_classes=self.ydim_output)
-            x_limit = torch.ones(self.Xdim_output) / self.Xdim_output
-            e_limit = torch.ones(self.Edim_output) / self.Edim_output
-            y_limit = torch.ones(self.ydim_output) / self.ydim_output
-            self.limit_dist = utils.PlaceHolder(X=x_limit, E=e_limit, y=y_limit)
+        node_types = self.dataset_info.node_types.float()
+        x_marginals = node_types / torch.sum(node_types)
 
-        elif cfg.model.transition == 'marginal':
+        edge_types = self.dataset_info.edge_types.float()
+        e_marginals = edge_types / torch.sum(edge_types)
+        print(f"Marginal distribution of the classes: {x_marginals} for nodes, {e_marginals} for edges")
+        self.transition_model = MarginalUniformEdgesTransition(x_marginals=x_marginals, e_marginals=e_marginals,
+                                                            y_classes=self.ydim_output)
+        self.limit_dist = utils.PlaceHolder(X=x_marginals, E=e_marginals,
+                                            y=torch.ones(self.ydim_output) / self.ydim_output)
 
-            node_types = self.dataset_info.node_types.float()
-            x_marginals = node_types / torch.sum(node_types)
-
-            edge_types = self.dataset_info.edge_types.float()
-            e_marginals = edge_types / torch.sum(edge_types)
-            print(f"Marginal distribution of the classes: {x_marginals} for nodes, {e_marginals} for edges")
-            self.transition_model = MarginalUniformEdgesTransition(x_marginals=x_marginals, e_marginals=e_marginals,
-                                                              y_classes=self.ydim_output)
-            self.limit_dist = utils.PlaceHolder(X=x_marginals, E=e_marginals,
-                                                y=torch.ones(self.ydim_output) / self.ydim_output)
-
-        self.save_hyperparameters(ignore=['train_metrics', 'sampling_metrics'])
+        self.save_hyperparameters(ignore=['train_metrics', 'sampling_metrics', 'ms_features', 'ms_dataframe', 'ms_graph_dict'])
         self.start_epoch_time = None
         self.train_iterations = None
         self.val_iterations = None
@@ -108,6 +207,193 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         self.number_chain_steps = cfg.general.number_chain_steps
         self.best_val_nll = 1e8
         self.val_counter = 0
+
+    def on_load_checkpoint(self, checkpoint):
+
+        if 'state_dict' not in checkpoint:
+            return
+
+        state_dict = checkpoint['state_dict']
+        ms_encoder_keys_in_checkpoint = [
+            k for k in state_dict.keys() if k.startswith('ms_encoder_model.')
+        ]
+
+        if 'optimizer_states' in checkpoint and len(checkpoint['optimizer_states']) > 0:
+            opt_state = checkpoint['optimizer_states'][0]
+            saved_groups = len(opt_state.get('param_groups', []))
+
+            expected_groups = 1
+            if self.finetune_ms_encoder and self.ms_encoder_model is not None:
+                expected_groups = 2
+
+            if saved_groups != expected_groups:
+                checkpoint['optimizer_states'] = []
+                checkpoint['lr_schedulers'] = []
+                return
+
+            if self.ms_encoder_model is not None and len(ms_encoder_keys_in_checkpoint) == 0:
+                checkpoint['optimizer_states'] = []
+                checkpoint['lr_schedulers'] = []
+            elif self.ms_encoder_model is None and len(ms_encoder_keys_in_checkpoint) > 0:
+                checkpoint['optimizer_states'] = []
+                checkpoint['lr_schedulers'] = []
+            else:
+                saved_param_counts = [len(g.get('params', [])) for g in opt_state.get('param_groups', [])]
+                encoder_params_count = sum(1 for name, _ in self.named_parameters() if name.startswith("ms_encoder_model.") and _.requires_grad)
+                other_params_count = sum(1 for name, _ in self.named_parameters() if not name.startswith("ms_encoder_model.") and _.requires_grad)
+                
+                if expected_groups == 1:
+                    expected_param_counts = [other_params_count + encoder_params_count]
+                else:
+                    expected_param_counts = [other_params_count, encoder_params_count]
+                
+                if len(saved_param_counts) != len(expected_param_counts) or any(sc != ec for sc, ec in zip(saved_param_counts, expected_param_counts)):
+                    checkpoint['optimizer_states'] = []
+                    checkpoint['lr_schedulers'] = []
+
+    def load_state_dict(self, state_dict, strict=True):
+
+        ms_encoder_keys_in_checkpoint = [k for k in state_dict.keys() if k.startswith('ms_encoder_model.')]
+        
+        if self.ms_encoder_model is not None:
+            # Current model has ms_encoder_model
+            if len(ms_encoder_keys_in_checkpoint) == 0:
+                # Old checkpoint doesn't have ms_encoder_model - load everything else
+                # The ms_encoder_model will keep its initialization from __init__ (loaded from encoder checkpoint)
+                filtered_checkpoint = {k: v for k, v in state_dict.items() 
+                                      if not k.startswith('ms_encoder_model.')}
+                # Load without ms_encoder_model keys, use strict=False to allow missing keys
+                return super().load_state_dict(filtered_checkpoint, strict=False)
+            else:
+                # Checkpoint has ms_encoder_model keys - normal loading
+                return super().load_state_dict(state_dict, strict=False)
+        else:
+            # Current model doesn't have ms_encoder_model (finetune_ms_encoder=False)
+            if len(ms_encoder_keys_in_checkpoint) > 0:
+                # Checkpoint has ms_encoder keys but current model doesn't - remove them
+                filtered_checkpoint = {k: v for k, v in state_dict.items() 
+                                      if not k.startswith('ms_encoder_model.')}
+                return super().load_state_dict(filtered_checkpoint, strict=False)
+            else:
+                # Normal loading
+                return super().load_state_dict(state_dict, strict=False)
+
+    def _process_ms_row(self, row_idx):
+
+        row = self.ms_dataframe.iloc[row_idx]
+        precursor_type = one_hot_encode_precursor(row['precursor_type'])
+        collision_energy_nce = one_hot_encode_energy(int(row['collision_energy_NCE']))
+        spectrum = row['clean_spectrum_formula_array']
+        
+        if 'spectral_information_score' in row:
+            information_score = torch.tensor([row['spectral_information_score']], dtype=torch.float32)
+        else:
+            information_score = torch.tensor([1.0], dtype=torch.float32)
+        
+        sos = torch.cat([precursor_type, collision_energy_nce], dim=0).view(1, -1)
+        assert sos.shape == (1, 13), f"SOS shape should be (1, 13), got {sos.shape}"
+        
+
+        spectrum = np.array(spectrum)
+        
+        total_dim = len(elements) * 16
+        results = []
+        for arr in spectrum:
+            tensor = torch.zeros(total_dim)
+            start_idx = 0
+            for idx in range(len(elements)):
+                value = arr[idx]
+                tensor[start_idx:start_idx + 16] += self.ms_positional_encoding.encode(value)
+                start_idx += 16
+            results.append(tensor)
+        array = torch.stack(results)
+        
+        n = array.shape[0]
+        padded_tensor = self.ms_padded_tensor_template.clone()
+        padded_tensor[:n] = array
+        
+        mask = torch.ones(self.ms_max_peaks + 1, dtype=torch.bool)
+        mask[:n + 1] = 0
+        
+        return sos, padded_tensor, mask, information_score
+    
+    def _get_ms_features_for_smiles(self, smiles_list):
+
+        sos_list = []
+        formula_array_list = []
+        mask_list = []
+        num_spectra_list = []
+        
+        for smi in smiles_list:
+            if smi not in self.ms_graph_dict:
+                raise KeyError(f"SMILES {smi} not found in ms_graph_dict.")
+            
+            indices = self.ms_graph_dict[smi]
+
+            for row_idx in indices:
+                sos, formula_array, mask, _ = self._process_ms_row(row_idx)
+                sos_list.append(sos)
+                formula_array_list.append(formula_array)
+                mask_list.append(mask)
+            
+            num_spectra_list.append(len(indices))
+        
+
+        sos_batch = torch.stack(sos_list, dim=0)  
+
+
+        formula_array_batch = torch.stack(formula_array_list, dim=0)  
+        mask_batch = torch.stack(mask_list, dim=0)  
+
+        print (f"formula_array_batch shape: {formula_array_batch.shape}")
+        print (f"mask_batch shape: {mask_batch.shape}")
+        
+        return sos_batch, formula_array_batch, mask_batch, num_spectra_list
+
+    def _get_embeddings(self, data):
+
+        if self.finetune_ms_encoder and self.ms_encoder_model is not None:
+            
+            if not hasattr(data, 'smiles') or data.smiles is None:
+                raise ValueError("finetune_ms_encoder=True but data.smiles not found in batch.")
+            
+            smiles_list = data.smiles if isinstance(data.smiles, list) else [data.smiles]
+            sos_batch, formula_array_batch, mask_batch, num_spectra_list = \
+                self._get_ms_features_for_smiles(smiles_list)
+            
+            # Move to device
+            device = self.device
+            sos_batch = sos_batch.to(device)
+            formula_array_batch = formula_array_batch.to(device)
+            mask_batch = mask_batch.to(device)
+            
+            embeddings = []
+            start_idx = 0
+            
+            for num_spec in num_spectra_list:
+                end_idx = start_idx + num_spec
+                
+                sos = sos_batch[start_idx:end_idx]  # Should be (N_spec, 1, 13)
+                formula_array = formula_array_batch[start_idx:end_idx]  # (N_spec, max_peaks, 144)
+                mask = mask_batch[start_idx:end_idx]  # (N_spec, max_peaks+1)
+               
+                ms_emb = self.ms_encoder_model.ms_encoder(sos, formula_array, mask=mask).float()  # (N_spec, D)
+                ms_emb = ms_emb / (ms_emb.norm(dim=1, keepdim=True) + 1e-8)
+                emb = torch.mean(ms_emb, dim=0, keepdim=True)  # (1, D)
+                emb = emb / (emb.norm(dim=1, keepdim=True) + 1e-8)
+                
+                embeddings.append(emb)
+                start_idx = end_idx
+            
+            return torch.cat(embeddings, dim=0)  # (batch_size, emb_dim)
+        
+        # Fallback: use precomputed embeddings
+        if not hasattr(data, 'embedding') or data.embedding is None:
+            raise ValueError(
+                "finetune_ms_encoder=False but data.embedding is None. "
+                "Either enable finetune_ms_encoder=True or provide precomputed embeddings in the dataset."
+            )
+        return data.embedding
 
     def training_step(self, data, i):
         if data.edge_index.numel() == 0:
@@ -121,7 +407,8 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         dense_data = dense_data.mask(node_mask)
         E = dense_data.E
         noisy_data = self.apply_noise(dense_data.X, dense_data.E, data.y, node_mask)
-        extra_data = self.compute_extra_data(noisy_data, data.embedding)
+        embeddings = self._get_embeddings(data)
+        extra_data = self.compute_extra_data(noisy_data, embeddings)
         atom_attr = None
 
         pred = self.forward(noisy_data, extra_data, node_mask, atom_attr)
@@ -138,8 +425,42 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         return {'loss': loss}
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.parameters(), lr=self.cfg.train.lr, amsgrad=True,
-                                 weight_decay=self.cfg.train.weight_decay)
+
+        base_lr = self.cfg.train.lr
+        ms_encoder_lr = getattr(self.cfg.train, "ms_encoder_lr", None) or base_lr
+        weight_decay = self.cfg.train.weight_decay
+
+        # If there is no encoder attached, fall back to a single parameter group.
+        if not self.finetune_ms_encoder or self.ms_encoder_model is None:
+            return torch.optim.AdamW(
+                self.parameters(),
+                lr=base_lr,
+                amsgrad=True,
+                weight_decay=weight_decay,
+            )
+
+        # Split parameters into diffusion vs encoder groups.
+        encoder_params = []
+        other_params = []
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name.startswith("ms_encoder_model."):
+                encoder_params.append(param)
+            else:
+                other_params.append(param)
+
+        param_groups = [
+            {"params": other_params, "lr": base_lr},
+            {"params": encoder_params, "lr": ms_encoder_lr},
+        ]
+
+        return torch.optim.AdamW(
+            param_groups,
+            lr=base_lr,
+            amsgrad=True,
+            weight_decay=weight_decay,
+        )
 
     def on_fit_start(self) -> None:
         self.train_iterations = len(self.trainer.datamodule.train_dataloader())
@@ -178,15 +499,27 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.atom_attr)
         dense_data = dense_data.mask(node_mask)
         noisy_data = self.apply_noise(dense_data.X, dense_data.E, data.y, node_mask)
-        extra_data = self.compute_extra_data(noisy_data, data.embedding)
+        embeddings = self._get_embeddings(data)
+        extra_data = self.compute_extra_data(noisy_data, embeddings)
 
         pred = self.forward(noisy_data, extra_data, node_mask)
         pred.X = dense_data.X
         pred.y = data.y
 
-        nll = self.compute_val_loss(pred, noisy_data, dense_data.X, dense_data.E, data.y, node_mask, test=False, smiles = data.smiles, embeddings = data.embedding)
+        nll = self.compute_val_loss(
+            pred,
+            noisy_data,
+            dense_data.X,
+            dense_data.E,
+            data.y,
+            node_mask,
+            test=False,
+            atom_attr=None,
+            smiles=data.smiles,
+            embeddings=embeddings,
+        )
         
-        self.val_data.append([dense_data, data.embedding, data.smiles])
+        self.val_data.append([dense_data, embeddings, data.smiles])
         self.val_smiles.extend(data.smiles)
             
         return {'loss': nll}
@@ -285,15 +618,27 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         batch_size = dense_data.X.shape[0]  
         dense_data = dense_data.mask(node_mask)
         noisy_data = self.apply_noise(dense_data.X, dense_data.E, data.y, node_mask)
-        extra_data = self.compute_extra_data(noisy_data, data.embedding)
+        embeddings = self._get_embeddings(data)
+        extra_data = self.compute_extra_data(noisy_data, embeddings)
 
         pred = self.forward(noisy_data, extra_data, node_mask)
         pred.X = dense_data.X
         pred.y = data.y
 
-        nll = self.compute_val_loss(pred, noisy_data, dense_data.X, dense_data.E, data.y, node_mask, test=True, smiles = data.smiles, embeddings = data.embedding)
+        nll = self.compute_val_loss(
+            pred,
+            noisy_data,
+            dense_data.X,
+            dense_data.E,
+            data.y,
+            node_mask,
+            test=True,
+            atom_attr=None,
+            smiles=data.smiles,
+            embeddings=embeddings,
+        )
 
-        self.test_data.append([dense_data, data.embedding, data.smiles])
+        self.test_data.append([dense_data, embeddings, data.smiles])
         self.test_smiles.extend(data.smiles)
             
         return {'loss': nll}
@@ -498,8 +843,13 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         sampled_0 = utils.PlaceHolder(X=X0, E=E0, y=y0).mask(node_mask)
 
         # Predictions
-        noisy_data = {'X_t': sampled_0.X, 'E_t': sampled_0.E, 'y_t': sampled_0.y, 'node_mask': node_mask,
-                      't': torch.zeros(X0.shape[0], 1).type_as(y0)}
+        noisy_data = {
+            'X_t': sampled_0.X,
+            'E_t': sampled_0.E,
+            'y_t': sampled_0.y,
+            'node_mask': node_mask,
+            't': torch.zeros(X0.shape[0], 1).type_as(y0),
+        }
         extra_data = self.compute_extra_data(noisy_data, embeddings)
         pred0 = self.forward(noisy_data, extra_data, node_mask, atom_attr)
 
@@ -645,14 +995,16 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
 
         assert (E == torch.transpose(E, 1, 2)).all()
         assert number_chain_steps < self.T
-        chain_X_size = torch.Size((number_chain_steps, keep_chain, X.size(1)))
-        chain_E_size = torch.Size((number_chain_steps, keep_chain, E.size(1), E.size(2)))
+        # Chain tensors are only needed when we actually keep intermediate steps
+        if keep_chain > 0 and number_chain_steps > 0:
+            chain_X_size = torch.Size((number_chain_steps, keep_chain, X.size(1)))
+            chain_E_size = torch.Size((number_chain_steps, keep_chain, E.size(1), E.size(2)))
 
-        chain_X = torch.zeros(chain_X_size)
-        chain_E = torch.zeros(chain_E_size)
+            chain_X = torch.zeros(chain_X_size)
+            chain_E = torch.zeros(chain_E_size)
 
         # Iteratively sample p(z_s | z_t) for t = 1, ..., T, with s = t - 1.
-        with tqdm(total=self.T, desc="diffusion steps generation") as pbar:
+        with tqdm(total=self.T, desc="diffusion steps generation") as pbar:         
 
             for s_int in reversed(range(0, self.T)):
                 s_array = s_int * torch.ones((batch_size, 1)).type_as(y)
@@ -664,10 +1016,12 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
                 
                 X, E, y = sampled_s.X, sampled_s.E, sampled_s.y
 
-                # Save the first keep_chain graphs
-                write_index = (s_int * number_chain_steps) // self.T
-                chain_X[write_index] = discrete_sampled_s.X[:keep_chain]
-                chain_E[write_index] = discrete_sampled_s.E[:keep_chain]
+                # Save the first keep_chain graphs (only if we requested chains)
+                if keep_chain > 0 and number_chain_steps > 0:
+                    write_index = (s_int * number_chain_steps) // self.T
+                    if 0 <= write_index < chain_X.size(0):
+                        chain_X[write_index] = discrete_sampled_s.X[:keep_chain]
+                        chain_E[write_index] = discrete_sampled_s.E[:keep_chain]
 
                 pbar.update()
 
@@ -676,7 +1030,7 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         X, E, y = sampled_s.X, sampled_s.E, sampled_s.y
 
         # Prepare the chain for saving
-        if keep_chain > 0:
+        if keep_chain > 0 and number_chain_steps > 0:
             final_X_chain = X[:keep_chain]
             final_E_chain = E[:keep_chain]
 
@@ -700,7 +1054,7 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
             molecule_list.append([atom_types, edge_types])
 
         # Visualize chains
-        if self.visualization_tools is not None:
+        if self.visualization_tools is not None and keep_chain > 0 and number_chain_steps > 0:
             self.print('Visualizing chains...')
             current_path = os.getcwd()
             num_molecules = chain_X.size(1)       # number of molecules

@@ -1,0 +1,15 @@
+index	name	canonicalized_smiles
+1	Caffeine	Cn1c(=O)c2c(ncn2C)n(C)c1=O
+2	Thiobencarb	CCN(CC)C(=O)SCc1ccc(Cl)cc1
+3	Sulfamethoxazole	Cc1cc(NS(=O)(=O)c2ccc(N)cc2)no1
+4	Acetaminophen	CC(=O)Nc1ccc(O)cc1
+5	Atrazine	CCNc1nc(Cl)nc(NC(C)C)n1
+6	Trimethoprim	COc1cc(Cc2cnc(N)nc2N)cc(OC)c1OC
+7	Hexazinone	CN(C)c1nc(=O)n(C2CCCCC2)c(=O)n1C
+8	Bromacil	CCC(C)n1c(=O)[nH]c(C)c(Br)c1=O
+9	Propazine	CC(C)Nc1nc(Cl)nc(NC(C)C)n1
+10	Esbiol (S-Bioallethrin)	C=CCC1=C(C)[C@@H](OC(=O)[C@@H]2[C@@H](C=C(C)C)C2(C)C)CC1=O
+11	Norflurazon	CNc1cnn(-c2cccc(C(F)(F)F)c2)c(=O)c1Cl
+12	Prometryne	CSc1nc(NC(C)C)nc(NC(C)C)n1
+13	Carbamazepine	NC(=O)N1c2ccccc2C=Cc2ccccc21
+14	Ciprofloxacin	O=C(O)c1cn(C2CC2)c2cc(N3CCNCC3)c(F)cc2c1=O

@@ -307,10 +307,8 @@ class MSDataModule(MolecularDataModule):
                     shuffle_train = False,
                     batch = True)
 
-        
-        if cfg.conditioning.embeddings_type in ["ms2emb", "mol2emb", "ms2fp"]:
+        if cfg.conditioning.embeddings_type in ["ms2emb", "mol2emb", "ms2fp"] and cfg.conditioning.embedding_model_path is not None:
             model_path = os.path.join(base_path_ms2mol, cfg.conditioning.embedding_model_path)
-        
         else:
             model_path = None
 
@@ -365,11 +363,10 @@ class MSDataModule_lmdb(MolecularDataModule):
                         batch = True)
 
 
-        model_path = (
-            os.path.join(base_path_ms2mol, cfg.conditioning.embedding_model_path)
-            if cfg.conditioning.embeddings_type in ["ms2emb", "mol2emb", "ms2fp"]
-            else None
-        )
+        if cfg.conditioning.embeddings_type in ["ms2emb", "mol2emb", "ms2fp"] and cfg.conditioning.embedding_model_path is not None:
+            model_path = os.path.join(base_path_ms2mol, cfg.conditioning.embedding_model_path)
+        else:
+            model_path = None
 
         datasets = {
             "train": MSDatasetLMDB("train", dataloader, root=root_path, remove_h=cfg.dataset.remove_h,

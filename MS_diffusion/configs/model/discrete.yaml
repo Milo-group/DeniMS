@@ -1,6 +1,6 @@
 # Model settings
 type: 'discrete'
-transition: 'marginal'                          # uniform or marginal
+transition: 'marginal'                          # marginal transition model
 model: 'graph_tf'
 diffusion_steps: 1000
 diffusion_noise_schedule: 'cosine'              # 'cosine', 'polynomial_2'

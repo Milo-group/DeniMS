@@ -20,3 +20,6 @@ NIST
 *.parquet
 help_notebooks
 trial.ipynb
+
+!experimental.csv
+!experimental.parquet

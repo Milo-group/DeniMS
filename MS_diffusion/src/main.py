@@ -7,10 +7,15 @@ import sys
 import time
 import torch
 
-# Add parent directory to sys.path to allow 'src' module imports when loading checkpoints
+# Add parent directory (MS_diffusion) to sys.path to allow 'src' module imports when loading checkpoints
 _ms_diffusion_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ms_diffusion_dir not in sys.path:
     sys.path.insert(0, _ms_diffusion_dir)
+
+# Add ms2mol project root to sys.path to access the ms2mol encoder & dataloaders when needed
+_ms2mol_root = pathlib.Path(os.path.realpath(__file__)).parents[2]
+if str(_ms2mol_root) not in sys.path:
+    sys.path.insert(0, str(_ms2mol_root))
 
 # Patch torch.load to use weights_only=False by default for PyTorch 2.6+ compatibility
 _original_torch_load = torch.load
@@ -33,6 +38,15 @@ from diffusion.extra_features import ExtraFeatures
 from diffusion.extra_features_molecular import ExtraMolecularFeatures
 
 from datasets import ms_dataset
+
+import sys
+import pathlib
+_ms2mol_root = pathlib.Path(os.path.realpath(__file__)).parents[2]
+if str(_ms2mol_root) not in sys.path:
+    sys.path.insert(0, str(_ms2mol_root))
+import pyarrow.parquet as pq
+import pandas as pd
+
 from metrics.molecular_metrics import SamplingMolecularMetricsEdges 
 from metrics.molecular_metrics_discrete import TrainMolecularMetricsDiscreteEdges
 from analysis.visualization import MolecularVisualization
@@ -69,22 +83,56 @@ def _main_impl(cfg: DictConfig):
     dataset_infos = ms_dataset.MSinfos(datamodule=datamodule, cfg=cfg)
     train_smiles = ms_dataset.get_train_smiles(cfg=cfg, train_dataloader=datamodule.train_dataloader(),
                                         dataset_infos=dataset_infos, evaluate_dataset=False, source = True)
-
+    
     extra_features = ExtraFeatures(cfg.model.extra_features, dataset_info=dataset_infos)
-
+    
     domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos, embeddings = True)
     
+    if getattr(cfg.train, "finetune_ms_encoder", False):
+        encoder_ckpt_path = getattr(cfg.conditioning, "embedding_model_path", None)
+        if encoder_ckpt_path is not None and str(encoder_ckpt_path).lower() not in ("none", ""):
+            # Load checkpoint to infer embedding dimension
+            if not os.path.isabs(encoder_ckpt_path):
+                encoder_ckpt_path = os.path.join(str(_ms2mol_root), encoder_ckpt_path)
+              
     dataset_infos.compute_input_output_dims(datamodule=datamodule, extra_features=extra_features,
                                             domain_features=domain_features, embeddings = True)
+
+    # Load parquet and graph_dict for on-the-fly MS feature encoding when finetuning
+    ms_dataframe = None
+    ms_graph_dict = None
+    if getattr(cfg.train, "finetune_ms_encoder", False):
+        if pq is None or pd is None:
+            raise ImportError("Could not import pyarrow.parquet or pandas for loading MS data.")
+        
+        ms_data_path = os.path.join(str(_ms2mol_root), cfg.conditioning.ms_data_path)
+        smiles_path = os.path.join(str(_ms2mol_root), cfg.conditioning.graph_dict_path)
+        
+        print(f"Loading MS data from {ms_data_path} and {smiles_path} for on-the-fly encoding...")
+        ms_dataframe = pq.read_table(ms_data_path, use_threads=True).to_pandas()
+        loaded_graph_dict = torch.load(smiles_path, weights_only=False)
+        print(f"Loaded {len(ms_dataframe)} MS spectra and {len(loaded_graph_dict)} SMILES entries.")
+        
+        # Extract indices from graph_dict (first element is the indices list)
+        # graph_dict structure: {smiles: [indices_list, ...other_data]}
+        ms_graph_dict = {smi: loaded_graph_dict[smi][0] for smi in loaded_graph_dict if len(loaded_graph_dict[smi]) > 0}
+        print(f"Extracted MS indices for {len(ms_graph_dict)} SMILES.")
 
     train_metrics = TrainMolecularMetricsDiscreteEdges(dataset_infos)
 
     sampling_metrics = SamplingMolecularMetricsEdges(dataset_infos, train_smiles)
     visualization_tools = MolecularVisualization(cfg.dataset.remove_h, dataset_infos=dataset_infos)
 
-    model_kwargs = {'dataset_infos': dataset_infos, 'train_metrics': train_metrics,
-                    'sampling_metrics': sampling_metrics, 'visualization_tools': visualization_tools,
-                    'extra_features': extra_features, 'domain_features': domain_features}
+    model_kwargs = {
+        'dataset_infos': dataset_infos,
+        'train_metrics': train_metrics,
+        'sampling_metrics': sampling_metrics,
+        'visualization_tools': visualization_tools,
+        'extra_features': extra_features,
+        'domain_features': domain_features,
+        'ms_dataframe': ms_dataframe,
+        'ms_graph_dict': ms_graph_dict,
+    }
 
     utils.create_folders(cfg)
     model = DiscreteEdgesDenoisingDiffusion(cfg=cfg, **model_kwargs)
@@ -93,7 +141,7 @@ def _main_impl(cfg: DictConfig):
     if cfg.train.save_model:
         checkpoint_callback = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}",
                                               filename='{epoch}',
-                                              monitor='val/E_logp',
+                                              monitor='val/epoch_NLL',
                                               save_top_k=5,
                                               mode='min',
                                               every_n_epochs=1)
