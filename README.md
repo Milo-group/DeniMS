@@ -236,15 +236,7 @@ pixi run test-e2e --skip-clean
 
 ## Retrain a model
 
-### Preprocessing
-
-We process high-resolution MS datasets using a standardized preparation pipeline that filters invalid entries, annotates fragment-ion formulas, and associates each spectrum with the relevant metadata. The initial processing steps follow our previous work, available in the following repository: https://github.com/Nir-Cohen-2003/HRMS_utils.
-
-The final preprocessing scripts used in this project are provided in the `Preprocessing/` folder, and the raw-data → parquet converters in `converters/` (see [Data preparation](#data-preparation) above).
-
-A fully integrated pipeline with step-by-step explanations **will be added soon**.
-
-In the meantime, the preprocessed FragHub Parquet file and the corresponding molecular graph dictionary (FragHub_filtered_smiles_dict.pt, FragHub_filtered.parquet) can be downloaded from [Zenodo](https://zenodo.org/records/19060052).
+For data preparation (converters, `prep-data`, graph dictionaries, and splits), see [Data preparation](#data-preparation) above. Preprocessed FragHub files (`FragHub_filtered.parquet`, `FragHub_filtered_smiles_dict.pt`) can also be downloaded from [Zenodo](https://zenodo.org/records/19060052).
 
 ### Stage 1: Encoder pretraining
 
