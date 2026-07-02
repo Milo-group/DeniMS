@@ -54,12 +54,9 @@ def formulas_to_arrays(formulas):
     Convert a list/array of molecular formula strings to a list of numpy arrays
     in the order: H, C, N, O, F, P, S, Cl, Br, I.
     """
-    # Define the element order and a lookup
     elements = ["H", "C", "N", "O", "F", "S", "Cl", "Br", "I"]
     idx = {el: i for i, el in enumerate(elements)}
 
-    # Pattern: element symbol = capital letter + optional lowercase
-    # followed by an optional integer count
     pattern = re.compile(r"([A-Z][a-z]?)(\d*)")
 
     result = []
@@ -109,7 +106,6 @@ def filter_df(df):
     print("Step 1/3: Deriving spectrum features")
     print("=" * 60)
 
-    # Enable tqdm integration with pandas
     try:
         from tqdm.auto import tqdm as _tqdm
 
@@ -118,9 +114,6 @@ def filter_df(df):
     except Exception:
         use_tqdm = False
 
-    # Derive clean_spectrum_formula_array (if not already present) and num_clean_peaks.
-    # Pre-computed arrays are the preferred input; formula-string parsing is a
-    # fallback that runs only when the array column is missing.
     if "clean_spectrum_formula_array" in df.columns:
         print("  'clean_spectrum_formula_array' already present -- using pre-computed arrays.")
         if "num_clean_peaks" not in df.columns:
@@ -237,7 +230,6 @@ def load_parquet_with_column_filter(parquet_path, print_schema=False):
         print(pf.schema)
     
     try:
-        # Read just the first row to get column names (very fast)
         sample_table = pq.read_table(parquet_path, columns=None)
         schema_column_names = list(sample_table.column_names)
     except Exception as e:
@@ -245,10 +237,8 @@ def load_parquet_with_column_filter(parquet_path, print_schema=False):
             arrow_schema = pf.schema_arrow if hasattr(pf, 'schema_arrow') else pf.schema.to_arrow_schema()
             schema_column_names = list(arrow_schema.names)
         except:
-            # Last resort: extract from Parquet schema fields (may miss nested columns)
             schema_column_names = [field.name for field in pf.schema]
     
-    # Filter to only columns that exist in the schema
     columns_to_load = [col for col in desired_columns if col in schema_column_names]
     missing_columns = [col for col in desired_columns if col not in schema_column_names]
     

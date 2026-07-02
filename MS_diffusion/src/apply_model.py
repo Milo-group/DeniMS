@@ -275,6 +275,77 @@ def aggregate_ensemble_from_existing_runs(root_dir, output_dir=None):
     return pd.DataFrame(rows)
 
 
+def aggregate_top5_csv_ensemble(top5_csv_paths, output_path=None):
+    """Aggregate several top5_smiles_per_compound*.csv files into one ensemble CSV."""
+    if not top5_csv_paths:
+        raise ValueError("At least one top5 CSV path is required")
+
+    compound_counts = defaultdict(Counter)
+    compound_total_generated = defaultdict(int)
+
+    for csv_path in top5_csv_paths:
+        if not os.path.isfile(csv_path):
+            raise ValueError(f"Top5 CSV not found: {csv_path}")
+
+        df = pd.read_csv(csv_path)
+        required = {"compound_index", "rank", "smiles", "count", "total_generated"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(f"CSV {csv_path} missing columns: {sorted(missing)}")
+
+        for compound_index, group in df.groupby("compound_index"):
+            compound_index = int(compound_index)
+            compound_total_generated[compound_index] += int(group["total_generated"].iloc[0])
+            for _, row in group.iterrows():
+                smiles = str(row["smiles"]).strip()
+                if not smiles or smiles in ("N/A", "nan", "None"):
+                    continue
+                compound_counts[compound_index][smiles] += int(row["count"])
+
+    rows = []
+    for compound_index in sorted(compound_counts.keys()):
+        counter = compound_counts[compound_index]
+        total_generated = compound_total_generated[compound_index]
+        if counter:
+            for rank, (smiles, count) in enumerate(counter.most_common(5), start=1):
+                rows.append({
+                    "compound_index": compound_index,
+                    "rank": rank,
+                    "smiles": smiles,
+                    "count": count,
+                    "total_generated": total_generated,
+                })
+        else:
+            rows.append({
+                "compound_index": compound_index,
+                "rank": 1,
+                "smiles": "N/A",
+                "count": 0,
+                "total_generated": total_generated,
+            })
+
+    if not rows:
+        raise ValueError("No data found in provided top5 CSV files")
+
+    result = pd.DataFrame(rows)
+
+    default_dir = os.path.dirname(os.path.abspath(top5_csv_paths[0]))
+    if output_path is None:
+        output_path = os.path.join(default_dir, "top5_smiles_per_compound_ensemble.csv")
+    else:
+        output_path = output_path.rstrip(os.sep)
+        if os.path.isdir(output_path) or not os.path.splitext(os.path.basename(output_path))[1]:
+            os.makedirs(output_path, exist_ok=True)
+            output_path = os.path.join(output_path, "top5_smiles_per_compound_ensemble.csv")
+
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    result.to_csv(output_path, index=False)
+    print(f"Aggregated {len(top5_csv_paths)} top5 CSV files -> {output_path}")
+    return result
+
+
 def run_inference_experimental(
     experimental_parquet_path,
     model_checkpoint_path=None,
@@ -286,13 +357,14 @@ def run_inference_experimental(
     ensemble_model_checkpoints=None,
     repeats_per_model=25,
     ensemble_models_dir=None,
+    add_run_suffix=True,
 ):
     """Run diffusion-based molecular structure inference on experimental MS data."""
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    run_suffix = datetime.now().strftime("run_%Y%m%d_%H%M%S")
-    base_output_dir = output_dir
-    output_dir = os.path.join(base_output_dir, run_suffix)
+    if add_run_suffix:
+        run_suffix = datetime.now().strftime("run_%Y%m%d_%H%M%S")
+        output_dir = os.path.join(output_dir, run_suffix)
 
     if ensemble_models_dir and (not ensemble_model_checkpoints or len(ensemble_model_checkpoints) == 0):
         if not os.path.isdir(ensemble_models_dir):
@@ -318,6 +390,7 @@ def run_inference_experimental(
                 encoder_checkpoint_path=encoder_checkpoint_path, output_dir=member_output_dir,
                 num_repeats=repeats_per_model, batch_size=batch_size, device=device,
                 ensemble_model_checkpoints=None, repeats_per_model=repeats_per_model,
+                add_run_suffix=False,
             )
             all_runs_results.append(member_results)
 
@@ -494,6 +567,12 @@ def run_inference_experimental(
     per_model_repeats = num_repeats
     total_repeats = per_model_repeats * len(model_ckpts)
 
+    def _model_results_dir(model_label):
+        """Use output_dir directly for nested ensemble member runs."""
+        if not add_run_suffix and len(model_ckpts) == 1:
+            return output_dir
+        return os.path.join(output_dir, model_label)
+
     ensemble_state_dicts = []
     expected_emb_dim = getattr(dataset_infos, "embeddings_dims", None)
     emb_type = getattr(cfg.conditioning, "embeddings_type", None)
@@ -596,7 +675,7 @@ def run_inference_experimental(
             compound_smiles_by_model[model_label] = smiles_list
             compound_molecules_by_model[model_label] = molecule_list
 
-            model_results_dir = os.path.join(output_dir, model_label)
+            model_results_dir = _model_results_dir(model_label)
             os.makedirs(model_results_dir, exist_ok=True)
 
             with open(os.path.join(model_results_dir, f"compound_{compound_idx}_molecules.txt"), 'w') as f:
@@ -653,7 +732,7 @@ def run_inference_experimental(
         all_results.append(compound_results)
 
     for model_label in model_labels:
-        model_results_dir = os.path.join(output_dir, model_label)
+        model_results_dir = _model_results_dir(model_label)
         os.makedirs(model_results_dir, exist_ok=True)
         model_results = per_model_outputs[model_label]
 
@@ -771,11 +850,31 @@ if __name__ == "__main__":
         default=None,
         help="Directory containing multiple .ckpt files to use as an ensemble (optional alternative to --ensemble_model_checkpoints)",
     )
+    parser.add_argument(
+        "--aggregate_top5_csv",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Aggregate several top5_smiles_per_compound*.csv files into one ensemble CSV (no inference)",
+    )
+    parser.add_argument(
+        "--aggregate_top5_output",
+        type=str,
+        default=None,
+        help="Output file or directory for --aggregate_top5_csv (default: next to first input CSV)",
+    )
 
     args = parser.parse_args()
 
+    if args.aggregate_top5_csv:
+        aggregate_top5_csv_ensemble(
+            top5_csv_paths=args.aggregate_top5_csv,
+            output_path=args.aggregate_top5_output,
+        )
+        sys.exit(0)
+
     if args.model_checkpoint is None and not args.ensemble_model_checkpoints and args.ensemble_models_dir is None:
-        parser.error("You must provide either --model_checkpoint or --ensemble_model_checkpoints or --ensemble_models_dir")
+        parser.error("You must provide either --model_checkpoint or --ensemble_model_checkpoints or --ensemble_models_dir or --aggregate_top5_csv")
 
     run_inference_experimental(
         experimental_parquet_path=args.experimental_parquet,

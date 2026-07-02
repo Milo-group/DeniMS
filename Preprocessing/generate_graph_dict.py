@@ -1,5 +1,8 @@
 import argparse
 import os
+import warnings
+
+warnings.filterwarnings("ignore", message=".*MorganGenerator.*")
 
 import numpy as np
 import pyarrow.parquet as pq

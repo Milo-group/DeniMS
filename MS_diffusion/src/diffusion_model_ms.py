@@ -215,6 +215,8 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
                                                               timesteps=cfg.model.diffusion_steps)
 
         node_types = self.dataset_info.node_types.float()
+        x_marginals = node_types / torch.sum(node_types)
+
         edge_types = self.dataset_info.edge_types.float()
         e_marginals = edge_types / torch.sum(edge_types)
         print(f"Marginal distribution of the classes: {x_marginals} for nodes, {e_marginals} for edges")

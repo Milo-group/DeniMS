@@ -71,6 +71,64 @@ class NodeCycleFeatures:
         return x_cycles, y_cycles
 
 
+def _safe_eigvalsh(L, eps=1e-5):
+    """Robust eigvalsh for Laplacians that can be ill-conditioned during diffusion sampling."""
+    bs, n, _ = L.shape
+    out_dtype = L.dtype
+    device = L.device
+    eye = torch.eye(n, device=device, dtype=torch.float64).unsqueeze(0)
+    L64 = L.to(torch.float64)
+
+    for attempt_eps in (eps, eps * 10, eps * 100, eps * 1000):
+        try:
+            return torch.linalg.eigvalsh(L64 + attempt_eps * eye).to(out_dtype)
+        except RuntimeError:
+            pass
+
+    eigvals = torch.zeros(bs, n, device=device, dtype=torch.float64)
+    eye_cpu = torch.eye(n, dtype=torch.float64)
+    L_cpu = L.detach().cpu().to(torch.float64)
+    for b in range(bs):
+        for attempt_eps in (eps, eps * 10, eps * 100, eps * 1000, eps * 1e4, eps * 1e5):
+            try:
+                eigvals[b] = torch.linalg.eigvalsh(L_cpu[b] + attempt_eps * eye_cpu)
+                break
+            except RuntimeError:
+                continue
+        else:
+            eigvals[b] = L_cpu[b].diagonal()
+    return eigvals.to(device=device, dtype=out_dtype)
+
+
+def _safe_eigh(L, eps=1e-5):
+    """Robust eigh for Laplacians that can be ill-conditioned during diffusion sampling."""
+    bs, n, _ = L.shape
+    out_dtype = L.dtype
+    device = L.device
+    eye = torch.eye(n, device=device, dtype=torch.float64).unsqueeze(0)
+    L64 = L.to(torch.float64)
+
+    for attempt_eps in (eps, eps * 10, eps * 100, eps * 1000):
+        try:
+            eigvals, eigvectors = torch.linalg.eigh(L64 + attempt_eps * eye)
+            return eigvals.to(out_dtype), eigvectors.to(out_dtype)
+        except RuntimeError:
+            pass
+
+    eigvals = torch.zeros(bs, n, device=device, dtype=torch.float64)
+    eigvectors = eye.expand(bs, -1, -1).clone()
+    eye_cpu = torch.eye(n, dtype=torch.float64)
+    L_cpu = L.detach().cpu().to(torch.float64)
+    for b in range(bs):
+        for attempt_eps in (eps, eps * 10, eps * 100, eps * 1000, eps * 1e4, eps * 1e5):
+            try:
+                eigvals[b], eigvectors[b] = torch.linalg.eigh(L_cpu[b] + attempt_eps * eye_cpu)
+                break
+            except RuntimeError:
+                continue
+    return eigvals.to(device=device, dtype=out_dtype), eigvectors.to(device=device, dtype=out_dtype)
+
+
 class EigenFeatures:
     """
     Code taken from : https://github.com/Saro00/DGN/blob/master/models/pytorch/eigen_agg.py
@@ -89,22 +147,14 @@ class EigenFeatures:
         L = L * mask.unsqueeze(1) * mask.unsqueeze(2) + mask_diag
 
         if self.mode == 'eigenvalues':
-            try:
-                eigvals = torch.linalg.eigvalsh(L)        # bs, n
-            except RuntimeError as e:
-                self._debug_batch_error(L, A, mask, noisy_data, e, "eigvalsh")
-                raise
+            eigvals = _safe_eigvalsh(L)        # bs, n
             eigvals = eigvals.type_as(A) / torch.sum(mask, dim=1, keepdim=True)
 
             n_connected_comp, batch_eigenvalues = get_eigenvalues_features(eigenvalues=eigvals)
             return n_connected_comp.type_as(A), batch_eigenvalues.type_as(A)
 
         elif self.mode == 'all':
-            try:
-                eigvals, eigvectors = torch.linalg.eigh(L)
-            except RuntimeError as e:
-                self._debug_batch_error(L, A, mask, noisy_data, e, "eigh")
-                raise
+            eigvals, eigvectors = _safe_eigh(L)
             eigvals = eigvals.type_as(A) / torch.sum(mask, dim=1, keepdim=True)
             eigvectors = eigvectors * mask.unsqueeze(2) * mask.unsqueeze(1)
             # Retrieve eigenvalues features

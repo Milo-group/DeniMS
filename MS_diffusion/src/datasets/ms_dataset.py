@@ -12,6 +12,7 @@ warnings.filterwarnings(
     category=FutureWarning,
     message=".*weights_only=False.*"
 )
+warnings.filterwarnings("ignore", message=".*MorganGenerator.*")
 
 import torch
 import torch.nn.functional as F

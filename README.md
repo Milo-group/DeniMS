@@ -16,6 +16,24 @@ curl -fsSL https://pixi.sh/install.sh | bash
 
 For other installation methods, see the [pixi documentation](https://pixi.sh/latest/#installation).
 
+**Add `pixi` to your PATH.** The installer places the executable in `~/.pixi/bin`. After installing, either open a new terminal or reload your shell config, then confirm `pixi` is available:
+
+```bash
+# Reload shell config (pick the file that matches your shell)
+source ~/.bashrc    # bash
+source ~/.zshrc     # zsh
+
+# Verify pixi is on PATH
+which pixi
+pixi --version
+```
+
+If `which pixi` prints nothing, add pixi to your PATH manually. Append this line to `~/.bashrc` (bash) or `~/.zshrc` (zsh), then open a new terminal or run `source` on that file:
+
+```bash
+export PATH="$HOME/.pixi/bin:$PATH"
+```
+
 2. Clone the repository and enter it:
 
 ```bash
@@ -28,6 +46,8 @@ cd DeniMS
 ```bash
 pixi install --all
 ```
+
+> **Note:** This step may take several minutes. Pixi downloads and resolves all dependencies for both environments (including large packages such as PyTorch and CUDA libraries).
 
 The workspace defines two environments:
 
