@@ -78,8 +78,6 @@ The `converters/` package contains two standalone scripts that turn raw MS data 
 | `converters/build_training_parquet.py` | MSP / MGF / MSPEC spectral library (with SMILES/InChI) | `<name>_denims_training.parquet` | Training (§2) |
 | `converters/build_inference_parquet.py` | mzML file(s) | `<name>_denims_inference.parquet` | Inference (§3) |
 
-Both remap HRMS_utils' 12-element formula vector (`[H, C, N, O, F, Na, P, S, Cl, K, Br, I]`) down to DeniMS' 9-element order, dropping any row/peak carrying an unsupported element (`Na`, `P`, `K`).
-
 They are exposed as pixi tasks in the `data-prep` environment:
 
 ```bash
