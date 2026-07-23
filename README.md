@@ -152,7 +152,7 @@ pixi run apply-model \
   --num_repeats 50 \
 ```
 
-Our trained models (Fraghub_contrastive_random.ckpt, Fraghub_FP_random.ckpt) can be downloaded from [Zenodo](https://zenodo.org/records/19060052).
+Our trained models can be downloaded from [Zenodo](https://zenodo.org/records/20972446).
 
 #### Running `apply-model` as an ensemble
 
@@ -205,7 +205,7 @@ script will look for, in order:
 
 If neither file is present, the script prints a clear error telling you to
 download `FragHub_filtered.parquet` from
-[Zenodo record 19060052](https://zenodo.org/records/19060052) and place it at
+[Zenodo](https://zenodo.org/records/20972446) and place it at
 `Preprocessing/fraghub/fraghub_filtered.parquet`. (If you have the *raw*
 `fraghub.parquet` from before filtering, place it at
 `Preprocessing/fraghub/fraghub.parquet` and the script will run `pixi run
@@ -234,11 +234,11 @@ pixi run test-e2e --skip-clean
 
 ## Retrain a model
 
-For data preparation (converters, `prep-data`, graph dictionaries, and splits), see [Data preparation](#data-preparation) above. Preprocessed FragHub files (`FragHub_filtered.parquet`, `FragHub_filtered_smiles_dict.pt`) can also be downloaded from [Zenodo](https://zenodo.org/records/19060052).
+For data preparation (converters, `prep-data`, graph dictionaries, and splits), see [Data preparation](#data-preparation) above. Preprocessed FragHub and MassSpecGym files can also be downloaded from [Zenodo](https://zenodo.org/records/20972446).
 
 ### Stage 1: Encoder pretraining
 
-Train the MS spectra encoder with respect to molecular structures. The pretrained contrastive and FP_prediction encoderes (Contrastive_FragHub_random.pth, FP_FragHub_random.pth) can also be downloaded from [Zenodo](https://zenodo.org/records/19060052).
+Train the MS spectra encoder with respect to molecular structures. The pretrained contrastive and FP_prediction encoderes can also be downloaded from [Zenodo](https://zenodo.org/records/20972446).
 
 #### Basic Training Example
 
